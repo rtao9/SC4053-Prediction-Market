@@ -1,4 +1,5 @@
 pragma solidity ^0.8.28;
+import "hardhat/console.sol";
 
 contract PredictionMarket {
     
@@ -28,6 +29,7 @@ contract PredictionMarket {
 
     function createMarket(string memory _description, uint256 _resolutionTime) external {
         require(bytes(_description).length > 0, "Description cannot be empty");
+        console.log("Current block timestamp:", block.timestamp);
         require(_resolutionTime > block.timestamp, "Resolution time must be in the future");
 
         marketCountl++;
@@ -124,7 +126,8 @@ contract PredictionMarket {
         Outcome outcome,
         uint256 totalYesBets,
         uint256 totalNoBets,
-        uint256 resolutionTime
+        uint256 resolutionTime,
+        uint256 currentTime
     ){
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
         Market storage market = markets[_marketId];
@@ -135,7 +138,8 @@ contract PredictionMarket {
             market.outcome,
             market.totalYesBets,
             market.totalNoBets,
-            market.resolutionTime
+            market.resolutionTime,
+            block.timestamp
         );
     }
 

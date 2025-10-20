@@ -4,21 +4,16 @@ import { getDeployedAddress } from "./utils/getDeployedAddress";
 const { ethers } = await network.connect();
 
 const CONTRACT_ADDRESS = getDeployedAddress("PredictionMarket", {moduleName: "PredictionMarketModule",});
-const MARKET_ID = 1; // Example market ID
-const BET_AMOUNT = "0.01"; // ETH amount
+const MARKET_ID = 1;
 
 async function main() {
   const [bettor] = await ethers.getSigners();
   const predictionMarket = await ethers.getContractAt("PredictionMarket", CONTRACT_ADDRESS);
 
-  const prediction = true; // true = Yes, false = No
-
-  const tx = await predictionMarket.connect(bettor).placeBet(MARKET_ID, prediction, {
-    value: ethers.parseEther(BET_AMOUNT),
-  });
+  const tx = await predictionMarket.connect(bettor).claimPayout(MARKET_ID);
   await tx.wait();
 
-  console.log(`Bet placed by ${bettor.address} on market ${MARKET_ID}: ${prediction ? "YES" : "NO"} (${BET_AMOUNT} ETH)`);
+  console.log(`Payout claimed by ${bettor.address} for market ${MARKET_ID}`);
 }
 
 main().catch((error) => {

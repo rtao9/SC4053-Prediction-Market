@@ -1,20 +1,40 @@
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { network } from "hardhat";
 
 const { ethers } = await network.connect();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 async function main() {
-  console.log("🚀 Deploying PredictionMarket...");
-
+  console.log("Deploying PredictionMarket...");
   const PredictionMarket = await ethers.getContractFactory("PredictionMarket");
-  const predictionMarket = await PredictionMarket.deploy();
+  const contract = await PredictionMarket.deploy();
+  await contract.waitForDeployment();
 
-  await predictionMarket.waitForDeployment();
+  const address = await contract.getAddress();
+  console.log(`Deployed at ${address}`);
 
-  const address = await predictionMarket.getAddress();
-  console.log(`✅ PredictionMarket deployed at: ${address}`);
+  // Write to deployed_addresses.json (same format Ignition uses)
+  const chainId = (await ethers.provider.getNetwork()).chainId.toString();
+  const dir = path.join(__dirname, `../ignition/deployments/chain-${chainId}`);
+  const file = path.join(dir, "deployed_addresses.json");
+  fs.mkdirSync(dir, { recursive: true });
+
+  let json: Record<string, string> = {};
+  if (fs.existsSync(file)) {
+    json = JSON.parse(fs.readFileSync(file, "utf8"));
+  }
+
+  json["PredictionMarketModule#PredictionMarket"] = address;
+  fs.writeFileSync(file, JSON.stringify(json, null, 2));
+
+  console.log(`Address saved to ${file}`);
 }
 
-main().catch((error) => {
-  console.error(error);
+main().catch((err) => {
+  console.error(err);
   process.exitCode = 1;
 });
