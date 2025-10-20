@@ -10,8 +10,13 @@ const __dirname = path.dirname(__filename);
 
 async function main() {
   console.log("Deploying PredictionMarket...");
+  const [deployer, arbitrator] = await ethers.getSigners();
+
+  // You can use either the second signer or a fixed address as the arbitrator
+  const arbitratorAddress = arbitrator.address; // or hardcode: "0x1234..."
+
   const PredictionMarket = await ethers.getContractFactory("PredictionMarket");
-  const contract = await PredictionMarket.deploy();
+  const contract = await PredictionMarket.deploy(arbitratorAddress);
   await contract.waitForDeployment();
 
   const address = await contract.getAddress();

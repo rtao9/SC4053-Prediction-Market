@@ -4,6 +4,7 @@ import "hardhat/console.sol";
 contract PredictionMarket {
     
     uint256 public marketCountl;
+    address public arbitrator;
 
     enum MarketStatus { Open, Closed, Resolved }
     enum Outcome { Undecided, Yes, No }
@@ -24,8 +25,25 @@ contract PredictionMarket {
 
     event MarketCreated(uint256 marketId, address creator, string description);
     event BetPlaced(uint256 marketId, address bettor, bool betsYes, uint256 amount);
-    event MarketResolved(uint256 marketId, Outcome outcome);
+    event MarketResolved(uint256 marketId, Outcome outcome, address resolvedBy);
     event PayoutClaimed(uint256 marketId, address bettor, uint256 amount, string description);
+    event ArbitratorChanged(address newArbitrator);
+
+    modifier onlyArbitrator() {
+        require(msg.sender == arbitrator, "Only arbitrator can perform this action");
+        _;
+    }
+
+    constructor(address _arbitrator) {
+        require(_arbitrator != address(0), "Arbitrator cannot be zero address");
+        arbitrator = _arbitrator;
+    }
+
+    function setArbitrator(address _newArbitrator) external onlyArbitrator {
+        require(_newArbitrator != address(0), "Invalid arbitrator address");
+        arbitrator = _newArbitrator;
+        emit ArbitratorChanged(_newArbitrator);
+    }
 
     function createMarket(string memory _description, uint256 _resolutionTime) external {
         require(bytes(_description).length > 0, "Description cannot be empty");
@@ -50,6 +68,9 @@ contract PredictionMarket {
         require(block.timestamp < market.resolutionTime, "Betting period has ended");
         require(msg.value > 0, "Bet amount must be greater than zero");
         require(_prediction == true || _prediction == false, "Invalid prediction");
+        require(address(msg.sender).balance > msg.value, "Insufficient balance");
+
+        uint256 beforeBalance = address(msg.sender).balance;
 
         if (_prediction) {
             market.totalYesBets += msg.value;
@@ -59,6 +80,11 @@ contract PredictionMarket {
             market.betsYes[msg.sender] = false;
         }
         market.playerStakes[msg.sender] += msg.value;
+
+        uint256 afterBalance = address(msg.sender).balance;
+        console.log("User balance before:", beforeBalance);
+        console.log("User balance after: ", afterBalance);
+        console.log("Contract balance after:", address(this).balance);
 
         emit BetPlaced(_marketId, msg.sender, _prediction, msg.value);
     }
@@ -76,7 +102,17 @@ contract PredictionMarket {
         market.status = MarketStatus.Resolved;
         market.outcome = _outcome ? Outcome.Yes : Outcome.No;
 
-        emit MarketResolved(_marketId, market.outcome);
+        emit MarketResolved(_marketId, market.outcome, msg.sender);
+    }
+
+    function arbitratorMarket(uint256 _marketId, bool _outcome) external onlyArbitrator {
+        require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
+        Market storage market = markets[_marketId];
+        require(market.status != MarketStatus.Open, "Market must be closed or resolved");
+        market.status = MarketStatus.Resolved;
+        market.outcome = _outcome ? Outcome.Yes : Outcome.No;
+
+        emit MarketResolved(_marketId, market.outcome, msg.sender);
     }
 
     function calculatePayout(uint256 _marketId, address _bettor) external view returns (uint256) {
@@ -87,6 +123,7 @@ contract PredictionMarket {
 
         uint256 bettorStake = market.playerStakes[_bettor];
         if (bettorStake == 0) {
+            console.log("Bettor has 0 stakes.");
             return 0;
         }
 
@@ -94,9 +131,10 @@ contract PredictionMarket {
         if ((market.outcome == Outcome.Yes && bettorPrediction) || (market.outcome == Outcome.No && !bettorPrediction)) {
             uint256 totalWinningBets = market.outcome == Outcome.Yes ? market.totalYesBets : market.totalNoBets;
             uint256 totalLosingBets = market.outcome == Outcome.Yes ? market.totalNoBets : market.totalYesBets;
-
+            console.log("Bettor wins.");
             return bettorStake + (bettorStake * totalLosingBets) / totalWinningBets;
         } else {
+            console.log("Bettor loses.");
             return 0;
         }
     }
@@ -106,11 +144,23 @@ contract PredictionMarket {
 
         uint256 payout = this.calculatePayout(_marketId, msg.sender);
         require(payout > 0, "No payout available");
+        // Optional: sanity check contract balance
+        require(address(this).balance >= payout, "Insufficient contract balance");
 
         Market storage market = markets[_marketId];
         market.playerStakes[msg.sender] = 0;
+        console.log(payout);
 
-        payable(msg.sender).transfer(payout);
+        uint256 beforeBalance = address(msg.sender).balance;
+
+        //payable(msg.sender).transfer(payout);
+        (bool ok, ) = payable(msg.sender).call{value: payout}("");
+        require(ok, "Failed to send payout");
+
+        uint256 afterBalance = address(msg.sender).balance;
+        console.log("User balance before:", beforeBalance);
+        console.log("User balance after:", afterBalance);
+        console.log("Contract balance after:", address(this).balance);
 
         emit PayoutClaimed(_marketId, msg.sender, payout, "Payout Claimed");
     }

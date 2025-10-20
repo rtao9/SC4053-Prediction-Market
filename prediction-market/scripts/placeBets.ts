@@ -5,7 +5,7 @@ const { ethers } = await network.connect();
 
 const CONTRACT_ADDRESS = getDeployedAddress("PredictionMarket", {moduleName: "PredictionMarketModule",});
 const MARKET_ID = 1; // Example market ID
-const BET_AMOUNT = "0.01"; // ETH amount
+const BET_AMOUNT = "1.0"; // ETH amount
 
 async function main() {
   const [bettor] = await ethers.getSigners();
