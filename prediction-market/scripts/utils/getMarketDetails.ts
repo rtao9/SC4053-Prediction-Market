@@ -1,5 +1,5 @@
 import { network } from "hardhat";
-import { getDeployedAddress } from "./utils/getDeployedAddress";
+import { getDeployedAddress } from "./getDeployedAddress.js";
 
 const { ethers } = await network.connect();
 

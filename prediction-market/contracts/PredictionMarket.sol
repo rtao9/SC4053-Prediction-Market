@@ -4,9 +4,10 @@ import "hardhat/console.sol";
 contract PredictionMarket {
     
     uint256 public marketCountl;
-    address public arbitrator;
+    address public ownerAddress;
+    mapping(address => bool) public isArbitrator;
 
-    enum MarketStatus { Open, Closed, Resolved }
+    enum MarketStatus { Open, Closed, Resolving }
     enum Outcome { Undecided, Yes, No }
 
     struct Market {
@@ -14,41 +15,67 @@ contract PredictionMarket {
         string description;
         MarketStatus status;
         Outcome outcome;
+        uint256 resolutionTime;
         uint256 totalYesBets;
         uint256 totalNoBets;
-        uint256 resolutionTime;
-        mapping(address => uint256) playerStakes;
-        mapping(address => bool) betsYes;
+        mapping(address => uint256) yesStakes;
+        mapping(address => uint256) noStakes;
+        uint256 totalYesVotes;
+        uint256 totalNoVotes;
+        mapping(address => bool) voters;
     }
 
     mapping(uint256 => Market) public markets;
 
-    event MarketCreated(uint256 marketId, address creator, string description);
+    event MarketCreated(uint256 marketId, address creator, string description, uint256 resolutionTime);
     event BetPlaced(uint256 marketId, address bettor, bool betsYes, uint256 amount);
-    event MarketResolved(uint256 marketId, Outcome outcome, address resolvedBy);
+    event MarketResolving(uint256 marketId, address votedBy, bool vote);
+    event MarketClosed(uint256 marketId, address closedBy, Outcome outcome);
     event PayoutClaimed(uint256 marketId, address bettor, uint256 amount, string description);
-    event ArbitratorChanged(address newArbitrator);
+    event ArbitratorChanged(address newArbitrator, bool status);
 
-    modifier onlyArbitrator() {
-        require(msg.sender == arbitrator, "Only arbitrator can perform this action");
+    constructor(address[] memory _arbitrators, address owner) {
+        ownerAddress = owner;
+        for (uint i = 0; i < _arbitrators.length; i++) {
+            isArbitrator[_arbitrators[i]] = true;
+        }
+        isArbitrator[ownerAddress] = true;     // set Owner as an arbitrator as well
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == ownerAddress, "Only owner can perform this action");
         _;
     }
 
-    constructor(address _arbitrator) {
-        require(_arbitrator != address(0), "Arbitrator cannot be zero address");
-        arbitrator = _arbitrator;
+    modifier onlyArbitrator() {
+        require(isArbitrator[msg.sender], "Only arbitrator can perform this action");
+        _;
     }
 
-    function setArbitrator(address _newArbitrator) external onlyArbitrator {
-        require(_newArbitrator != address(0), "Invalid arbitrator address");
-        arbitrator = _newArbitrator;
-        emit ArbitratorChanged(_newArbitrator);
+    modifier onlyCreator(uint256 _marketId) {
+        require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
+        require(msg.sender == markets[_marketId].creator, "Only market creator can perform this action");
+        _;
+    }
+
+    function addArbitrator(address _address) external onlyOwner {
+        require(_address != address(0), "Invalid arbitrator address");
+        require(!isArbitrator[_address], "Address is already an arbitrator");
+        isArbitrator[_address] = true;
+        emit ArbitratorChanged(_address, true);
+    }
+
+    function removeArbitrator(address _address) external onlyOwner {
+        require(_address != address(0), "Invalid arbitrator address");
+        require(isArbitrator[_address], "Address is already not an arbitrator");
+        isArbitrator[_address] = false;
+        emit ArbitratorChanged(_address, false);
     }
 
     function createMarket(string memory _description, uint256 _resolutionTime) external {
         require(bytes(_description).length > 0, "Description cannot be empty");
-        console.log("Current block timestamp:", block.timestamp);
         require(_resolutionTime > block.timestamp, "Resolution time must be in the future");
+        console.log("Current block timestamp:", block.timestamp);   // TODO: Remove later
 
         marketCountl++;
         Market storage newMarket = markets[marketCountl];
@@ -57,7 +84,7 @@ contract PredictionMarket {
         newMarket.status = MarketStatus.Open;
         newMarket.resolutionTime = _resolutionTime;
 
-        emit MarketCreated(marketCountl, msg.sender, _description);
+        emit MarketCreated(marketCountl, msg.sender, _description, _resolutionTime);
     }
 
     function placeBet(uint256 _marketId, bool _prediction) external payable {
@@ -70,73 +97,77 @@ contract PredictionMarket {
         require(_prediction == true || _prediction == false, "Invalid prediction");
         require(address(msg.sender).balance > msg.value, "Insufficient balance");
 
-        uint256 beforeBalance = address(msg.sender).balance;
-
         if (_prediction) {
             market.totalYesBets += msg.value;
-            market.betsYes[msg.sender] = true;
+            market.yesStakes[msg.sender] += msg.value;
         } else {
             market.totalNoBets += msg.value;
-            market.betsYes[msg.sender] = false;
+            market.noStakes[msg.sender] = msg.value;
         }
-        market.playerStakes[msg.sender] += msg.value;
-
-        uint256 afterBalance = address(msg.sender).balance;
-        console.log("User balance before:", beforeBalance);
-        console.log("User balance after: ", afterBalance);
-        console.log("Contract balance after:", address(this).balance);
 
         emit BetPlaced(_marketId, msg.sender, _prediction, msg.value);
     }
 
-    function resolveMarket(uint256 _marketId, bool _outcome) external {
+    function voteMarketResult(uint256 _marketId, bool _outcome) external {
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
 
         Market storage market = markets[_marketId];
-        require(market.status == MarketStatus.Open, "Market is not open");
+        require(msg.sender == market.creator || isArbitrator[msg.sender] == true, "Only the market creator or an arbitrator can resolve the market");
+        require(!market.voters[msg.sender], "You have already casted your vote in this market");
+        require(market.status != MarketStatus.Closed, "Market has closed, you can no longer cast your vote");
         require(block.timestamp >= market.resolutionTime, "Resolution time has not been reached");
-        require(msg.sender == market.creator, "Only the market creator can resolve the market");
         require(_outcome == true || _outcome == false, "Invalid outcome");
-        require(market.outcome == Outcome.Undecided, "Market has already been resolved");
 
-        market.status = MarketStatus.Resolved;
-        market.outcome = _outcome ? Outcome.Yes : Outcome.No;
+        market.status = MarketStatus.Resolving;
+        
+        if (_outcome == true) {
+            market.totalYesVotes++;
+        } else {
+            market.totalNoVotes++;
+        }
 
-        emit MarketResolved(_marketId, market.outcome, msg.sender);
+        market.voters[msg.sender] = true;
+        emit MarketResolving(_marketId, msg.sender, _outcome);
     }
 
-    function arbitratorMarket(uint256 _marketId, bool _outcome) external onlyArbitrator {
+    function closeMarket(uint256 _marketId) external {
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
-        Market storage market = markets[_marketId];
-        require(market.status != MarketStatus.Open, "Market must be closed or resolved");
-        market.status = MarketStatus.Resolved;
-        market.outcome = _outcome ? Outcome.Yes : Outcome.No;
 
-        emit MarketResolved(_marketId, market.outcome, msg.sender);
+        Market storage market = markets[_marketId];
+        require(msg.sender == market.creator || isArbitrator[msg.sender] == true, "Only the market creator or an arbitrator can close the market");
+        require(market.status == MarketStatus.Resolving, "Market must be in the resolving status");
+        require(block.timestamp >= market.resolutionTime + 3600, "Closure time has not been reached");
+        
+        market.status = MarketStatus.Closed;
+        if (market.totalYesVotes > market.totalNoVotes) {
+            market.outcome = Outcome.Yes;
+        } else if (market.totalNoVotes > market.totalYesVotes) {
+            market.outcome = Outcome.No;
+        } else {
+            market.outcome = Outcome.Undecided;
+        }
+        
+        emit MarketClosed(_marketId, msg.sender, market.outcome);
     }
 
     function calculatePayout(uint256 _marketId, address _bettor) external view returns (uint256) {
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
 
         Market storage market = markets[_marketId];
-        require(market.status == MarketStatus.Resolved, "Market is not resolved");
+        require(market.status == MarketStatus.Closed, "Market is still resolving");
+        require(market.yesStakes[_bettor] > 0 || market.noStakes[_bettor] > 0, "You do not have any ongoing bets");
 
-        uint256 bettorStake = market.playerStakes[_bettor];
-        if (bettorStake == 0) {
-            console.log("Bettor has 0 stakes.");
-            return 0;
+        uint256 bettorStake;
+        if (market.outcome == Outcome.Yes) {
+            bettorStake = market.yesStakes[_bettor];
+        } else if (market.outcome == Outcome.No) {
+            bettorStake = market.noStakes[_bettor];
         }
 
-        bool bettorPrediction = market.betsYes[_bettor];
-        if ((market.outcome == Outcome.Yes && bettorPrediction) || (market.outcome == Outcome.No && !bettorPrediction)) {
-            uint256 totalWinningBets = market.outcome == Outcome.Yes ? market.totalYesBets : market.totalNoBets;
-            uint256 totalLosingBets = market.outcome == Outcome.Yes ? market.totalNoBets : market.totalYesBets;
-            console.log("Bettor wins.");
-            return bettorStake + (bettorStake * totalLosingBets) / totalWinningBets;
-        } else {
-            console.log("Bettor loses.");
-            return 0;
-        }
+        uint256 totalWinningBets = market.outcome == Outcome.Yes ? market.totalYesBets : market.totalNoBets;
+        uint256 totalLosingBets = market.outcome == Outcome.Yes ? market.totalNoBets : market.totalYesBets;
+
+        return bettorStake + (bettorStake * totalLosingBets) / totalWinningBets;
     }
 
     function claimPayout(uint256 _marketId) external {
@@ -144,23 +175,20 @@ contract PredictionMarket {
 
         uint256 payout = this.calculatePayout(_marketId, msg.sender);
         require(payout > 0, "No payout available");
-        // Optional: sanity check contract balance
-        require(address(this).balance >= payout, "Insufficient contract balance");
+        require(address(this).balance >= payout, "Insufficient contract balance"); // Sanity check contract balance
 
         Market storage market = markets[_marketId];
-        market.playerStakes[msg.sender] = 0;
-        console.log(payout);
 
-        uint256 beforeBalance = address(msg.sender).balance;
+        // Clear only the winning stake
+        if (market.outcome == Outcome.Yes) {
+            market.yesStakes[msg.sender] = 0;
+        } else if (market.outcome == Outcome.No) {
+            market.noStakes[msg.sender] = 0;
+        }
 
         //payable(msg.sender).transfer(payout);
         (bool ok, ) = payable(msg.sender).call{value: payout}("");
         require(ok, "Failed to send payout");
-
-        uint256 afterBalance = address(msg.sender).balance;
-        console.log("User balance before:", beforeBalance);
-        console.log("User balance after:", afterBalance);
-        console.log("Contract balance after:", address(this).balance);
 
         emit PayoutClaimed(_marketId, msg.sender, payout, "Payout Claimed");
     }
@@ -174,37 +202,48 @@ contract PredictionMarket {
         string memory description,
         MarketStatus status,
         Outcome outcome,
+        uint256 resolutionTime,
         uint256 totalYesBets,
         uint256 totalNoBets,
-        uint256 resolutionTime,
+        uint256 totalYesVotes,
+        uint256 totalNoVotes,
         uint256 currentTime
     ){
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
+
         Market storage market = markets[_marketId];
+
         return (
             market.creator,
             market.description,
             market.status,
             market.outcome,
+            market.resolutionTime,
             market.totalYesBets,
             market.totalNoBets,
-            market.resolutionTime,
+            market.totalYesVotes,
+            market.totalNoVotes,
             block.timestamp
         );
     }
 
-    function getBettorStake(uint256 _marketId, address _bettor) external view returns (uint256 stake, bool votedYes){
+    function getUserBets(uint256 _marketId, address _user) external view returns (uint256 yesAmount, uint256 noAmount) {
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
-
+        
         Market storage market = markets[_marketId];
-        return (market.playerStakes[_bettor], market.betsYes[_bettor]);
+        return (market.yesStakes[_user], market.noStakes[_user]);
     }
+
 
     function getMarketOutcome(uint256 _marketId) external view returns (Outcome outcome){
         require(_marketId > 0 && _marketId <= marketCountl, "Invalid market ID");
 
         Market storage market = markets[_marketId];
         return (market.outcome);
+    }
+
+    function getOwner() external view returns (address) {
+        return ownerAddress;
     }
 
 }
